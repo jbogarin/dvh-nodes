@@ -1,10 +1,69 @@
 from cornice.resource import resource
 import logging
 
+import requests
+
 from ..utils import cors_policy
 # from ..models.nodes import Nodes
 
 log = logging.getLogger(__name__)
+
+# search_query = {
+#   "aggs": {
+#     "group": {
+#        "terms": {
+#           "field": "bathroomID"
+#        },
+#        "aggs": {
+#          "group_docs": {
+#            "top_hits": {
+#              "size": 1,
+#              "sort": [
+#                {
+#                  "timestamp": {
+#                    "order": "desc"
+#                  }
+#                }
+#              ]
+#            }
+#          }
+#        }
+#     }
+#   }
+# }
+
+search_query ={
+  "size":0,
+  "aggs": {
+    "group": {
+       "terms": {
+          "field": "bathroomID",
+          "size": 20
+       },
+       "aggs": {
+         "group": {
+           "terms": {
+             "field": "sensorType"
+           },
+             "aggs": {
+               "group_docs": {
+                 "top_hits": {
+                   "size": 1,
+                   "sort": [
+                     {
+                       "timestamp": {
+                         "order": "desc"
+                       }
+                     }
+                   ]
+                 }
+               }
+             }
+          }
+       }
+    }
+  }
+}
 
 
 @resource(collection_path='/api/afa/v1/nodes', path='/api/afa/v1/nodes/{node}',
@@ -426,52 +485,67 @@ class Bath(object):
     def __init__(self, request):
         self.request = request
 
+        # 'nodeSet': [{
+        #     'nodes': [0, 1],
+        #     'label': 'server-switch',
+        #     'x': 100,
+        #     'y': 100,
+        #     # 'device_type': 'groupL',
+        #     'color': 'red',
+        #     'collapsed': 'false'
+        # }, {
+        #     'nodes': [2, 3],
+        #     'label': 'server-switch',
+        #     'x': 500,
+        #     'y': 500,
+        #     # 'device_type': 'groupL',
+        #     'collapsed': 'true'
+        # }]
+# }
+        # return baths_info
+
+
     # Collection methods #
     # @view(schema=ResourceSchema)
     def collection_get(self):
         '''Returns Active Baths in JSON.'''
         log.info('Nodes collection GET')
-        baths_info = { 'nodes': [{
-            'device_type': 'switch',
-            'name': 'Bath1',
-            'x': 0,
-            'y': 0,
-            'fixed': 'true',
-            'color': 'red'
-        },{
-            'device_type': 'switch',
-            'name': 'switch',
-            'x': 0,
-            'y': 200,
-            'fixed': 'true'
-        }, {
-            'device_type': 'cloud',
-            'name': 'cloud',
-            'x': 600,
-            'y': 400,
-            'fixed': 'true'
-        }, {
-            'device_type': 'groupL',
-            'name': 'Group',
-            'x': 600,
-            'y': 600,
-            'fixed': 'true'
-        }],
-        'nodeSet': [{
-            'nodes': [0, 1],
-            'label': 'server-switch',
-            'x': 100,
-            'y': 100,
-            # 'device_type': 'groupL',
-            'color': 'red',
-            'collapsed': 'false'
-        }, {
-            'nodes': [2, 3],
-            'label': 'server-switch',
-            'x': 500,
-            'y': 500,
-            # 'device_type': 'groupL',
-            'collapsed': 'true'
-        }]
-}
-        return baths_info
+        response = requests.post('http://search-devnethackathonlatam-qpkwhhp6qncz5eeavzwy6cx7v4.us-east-1.es.amazonaws.com/aitm/_search', json=search_query)
+        results = {'nodes': [], 'nodeSet': []}
+        elements = []
+        baths = []
+        node_count = 0
+        color = 'normal'
+        for bucket in response.json()['aggregations']['group']['buckets']:
+            group_x = 0
+            group_y = 0
+            bathID = 100
+            node_ids = []
+            gender = ''
+            internal_color = ''
+            for element in bucket['group']['buckets']:
+                br = element['group_docs']['hits']['hits'][0]['_source']
+                if br['status']  == 'normal' and br['gender'] == 'male':
+                    color = 'blue'
+                elif br['status'] == 'normal' and br['gender'] == 'female':
+                    color = 'pink'
+                elif br['status'] == 'warning':
+                    if internal_color != 'red':
+                        internal_color = 'yellow'
+                    color = 'yellow'
+                else:
+                    internal_color = 'red'
+                    color = 'red'
+                elements.append({'device_type': br['sensorType'], 'name': br['sensorType']+' '+str(br['bathroomID']), 'color': color, 'x': br['x'], 'y': br['y']})
+                group_x = group_x + br['x']
+                group_y = group_y + br['y']
+                bathID = br['bathroomID']
+                node_ids.append(node_count)
+                node_count = node_count + 1
+                gender = br['gender']
+            baths.append({'name': 'Bath '+str(bathID), 'x': group_x / 2, 'y': group_y / 2, 'nodes': node_ids, 'device_type': gender, 'color': internal_color})
+
+
+        results['nodes'] = elements
+        results['nodeSet'] = baths
+        return results
